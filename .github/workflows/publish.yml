@@ -1,0 +1,241 @@
+# Scaffold workflow. Pin every action to a commit SHA before production.
+# The environment secret for the index key is a bootstrap compromise until D13
+# moves index signing offline/HSM.
+name: Publish registry
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - registry-source.json
+      - packages/**
+      - keys/**
+      - .github/workflows/publish.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: registry-publish
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    environment:
+      name: registry-publish
+    steps:
+      - name: Checkout registry
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout Bufferite tooling
+        uses: actions/checkout@v4
+        with:
+          repository: bufferite/bufferite
+          ref: ${{ vars.BUFFERITE_TOOL_REF || 'main' }}
+          path: .bufferite-tool
+          persist-credentials: false
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.8'
+          channel: stable
+          cache: true
+
+      - name: Install tooling dependencies
+        working-directory: .bufferite-tool
+        run: flutter pub get
+
+      - name: Load signing keys
+        shell: bash
+        env:
+          PACKAGE_KEY: ${{ secrets.REGISTRY_PACKAGE_KEY }}
+          INDEX_KEY: ${{ secrets.REGISTRY_INDEX_KEY }}
+        run: |
+          set -euo pipefail
+          if [ ! -f keys/registry_keys.json ]; then
+            echo "::error::keys/registry_keys.json belum ada."
+            exit 1
+          fi
+          if [ -z "${PACKAGE_KEY:-}" ] || [ -z "${INDEX_KEY:-}" ]; then
+            echo "::error::Secret REGISTRY_PACKAGE_KEY/REGISTRY_INDEX_KEY belum diisi."
+            exit 1
+          fi
+          umask 077
+          printf '%s' "$PACKAGE_KEY" > "$RUNNER_TEMP/package-key.json"
+          printf '%s' "$INDEX_KEY" > "$RUNNER_TEMP/index-key.json"
+          jq -e '.algorithm == "ed25519" and (.privateKey | type == "string")' \
+            "$RUNNER_TEMP/package-key.json" > /dev/null
+          jq -e '.algorithm == "ed25519" and (.privateKey | type == "string")' \
+            "$RUNNER_TEMP/index-key.json" > /dev/null
+
+      - name: Download and verify previous index
+        id: previous
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_url="$(jq -r '.baseUrl' registry-source.json)"
+          status="$(curl -sS -o "$RUNNER_TEMP/previous.json" \
+            -w '%{http_code}' --retry 2 --retry-delay 2 --max-time 30 \
+            "$base_url" || true)"
+          if [ "$status" = "404" ]; then
+            rm -f "$RUNNER_TEMP/previous.json"
+            echo "path=" >> "$GITHUB_OUTPUT"
+            echo "Belum ada indeks publik; ini publish pertama."
+            exit 0
+          fi
+          if [ "$status" != "200" ]; then
+            echo "::error::Gagal mengambil indeks lama (HTTP $status)."
+            exit 1
+          fi
+          curl -fsSL --retry 2 --retry-delay 2 --max-time 30 \
+            "${base_url}.sig" -o "$RUNNER_TEMP/previous.json.sig"
+          (
+            cd .bufferite-tool
+            dart run tool/registry_cli.dart verify index \
+              --in "$RUNNER_TEMP/previous.json" \
+              --sig "$RUNNER_TEMP/previous.json.sig" \
+              --keyring "$GITHUB_WORKSPACE/keys/registry_keys.json" \
+              --base-url "$base_url"
+          )
+          echo "path=$RUNNER_TEMP/previous.json" >> "$GITHUB_OUTPUT"
+
+      - name: Sign packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t paths < <(jq -r '.packages[].path // empty' registry-source.json)
+          for rel in "${paths[@]}"; do
+            if [[ "$rel" != packages/* || "$rel" == *".."* ||
+              "$rel" == /* ]] ||
+              ! [[ "$rel" =~ ^packages/[A-Za-z0-9._/-]+$ ]]; then
+              echo "::error::Path paket tidak aman: $rel"
+              exit 1
+            fi
+            if [ -L "$rel" ] || [ ! -f "$rel" ]; then
+              echo "::error::Paket tidak valid: $rel"
+              exit 1
+            fi
+            (
+              cd .bufferite-tool
+              dart run tool/registry_cli.dart sign package \
+                --in "$GITHUB_WORKSPACE/$rel" \
+                --out "$GITHUB_WORKSPACE/$rel.sig" \
+                --key "$RUNNER_TEMP/package-key.json"
+            )
+          done
+
+      - name: Build index
+        shell: bash
+        env:
+          PREVIOUS_INDEX: ${{ steps.previous.outputs.path }}
+        run: |
+          set -euo pipefail
+          mkdir -p _site/registry/v1
+          args=(
+            build-index
+            --source "$GITHUB_WORKSPACE/registry-source.json"
+            --out "$GITHUB_WORKSPACE/_site/registry/v1/registry.json"
+            --keyring "$GITHUB_WORKSPACE/keys/registry_keys.json"
+          )
+          if [ -n "${PREVIOUS_INDEX:-}" ]; then
+            args+=(--base "$PREVIOUS_INDEX")
+          fi
+          (cd .bufferite-tool && dart run tool/registry_cli.dart "${args[@]}")
+
+      - name: Check immutable versions
+        shell: bash
+        env:
+          PREVIOUS_INDEX: ${{ steps.previous.outputs.path }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PREVIOUS_INDEX:-}" ]; then
+            echo "Publish pertama; pemeriksaan immutability dilewati."
+            exit 0
+          fi
+          jq -e --slurpfile next _site/registry/v1/registry.json '
+            all(.plugins[]; . as $old |
+              ([ $next[0].plugins[] |
+                 select(.pluginId == $old.pluginId and .version == $old.version)
+               ][0]) as $new |
+              ($new != null) and
+              ($new.sha256 == $old.sha256) and
+              ($new.downloadUrl == $old.downloadUrl)
+            )
+          ' "$PREVIOUS_INDEX" > /dev/null
+          echo "Semua versi lama tetap ada dengan hash dan URL yang sama."
+
+      - name: Copy packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p _site/registry/v1/packages
+          cp -R packages/. _site/registry/v1/packages/
+
+      - name: Sign and verify index
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_url="$(jq -r '.baseUrl' registry-source.json)"
+          (
+            cd .bufferite-tool
+            dart run tool/registry_cli.dart sign index \
+              --in "$GITHUB_WORKSPACE/_site/registry/v1/registry.json" \
+              --out "$GITHUB_WORKSPACE/_site/registry/v1/registry.json.sig" \
+              --key "$RUNNER_TEMP/index-key.json"
+            dart run tool/registry_cli.dart verify index \
+              --in "$GITHUB_WORKSPACE/_site/registry/v1/registry.json" \
+              --sig "$GITHUB_WORKSPACE/_site/registry/v1/registry.json.sig" \
+              --keyring "$GITHUB_WORKSPACE/keys/registry_keys.json" \
+              --base-url "$base_url"
+          )
+
+      - name: Verify deployed packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t paths < <(jq -r '.packages[].path // empty' registry-source.json)
+          for rel in "${paths[@]}"; do
+            (
+              cd .bufferite-tool
+              dart run tool/registry_cli.dart verify package \
+                --in "$GITHUB_WORKSPACE/_site/registry/v1/$rel" \
+                --sig "$GITHUB_WORKSPACE/_site/registry/v1/$rel.sig" \
+                --keyring "$GITHUB_WORKSPACE/keys/registry_keys.json"
+            )
+          done
+
+      - name: Write Pages metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          host="$(jq -r '.baseUrl' registry-source.json | sed -E 's#^https://([^/]+).*#\1#')"
+          printf '%s\n' "$host" > _site/CNAME
+          touch _site/.nojekyll
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
