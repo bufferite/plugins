@@ -1,0 +1,195 @@
+# Scaffold workflow. Pin every action to a commit SHA before production.
+name: Validate registry
+
+on:
+  pull_request:
+    paths:
+      - registry-source.json
+      - packages/**
+      - keys/**
+      - .github/workflows/validate.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: registry-validate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout registry
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout Bufferite tooling
+        uses: actions/checkout@v4
+        with:
+          repository: bufferite/bufferite
+          ref: ${{ vars.BUFFERITE_TOOL_REF || 'main' }}
+          path: .bufferite-tool
+          persist-credentials: false
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.8'
+          channel: stable
+          cache: true
+
+      - name: Install tooling dependencies
+        working-directory: .bufferite-tool
+        run: flutter pub get
+
+      - name: Validate source shape
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -e '
+            (.baseUrl // "" | tostring) as $base |
+            (.allowedHosts // [] | if type == "array" then . else [] end) as $hosts |
+            (.packages // [] | if type == "array" then . else [] end) as $packages |
+            ($base | startswith("https://")) and
+            ($hosts | length) >= 1 and ($hosts | length) <= 8 and
+            ($packages | length) <= 2000
+          ' registry-source.json > /dev/null
+
+          base_host="$(jq -r '.baseUrl' registry-source.json | sed -E 's#^https://([^/]+).*#\1#')"
+          jq -e --arg host "$base_host" \
+            '(.allowedHosts // []) | index($host) != null' \
+            registry-source.json > /dev/null
+
+          mapfile -t paths < <(jq -r '.packages[].path // empty' registry-source.json)
+          if [ "${#paths[@]}" -gt 0 ]; then
+            duplicates="$(printf '%s\n' "${paths[@]}" | sort | uniq -d)"
+            if [ -n "$duplicates" ]; then
+              echo "::error::Path paket duplikat: $duplicates"
+              exit 1
+            fi
+          fi
+          for rel in "${paths[@]}"; do
+            case "$rel" in
+              packages/*) ;;
+              *)
+                echo "::error::Semua packages[].path harus diawali packages/: $rel"
+                exit 1
+                ;;
+            esac
+            if [[ "$rel" == *".."* || "$rel" == /* ]] ||
+              ! [[ "$rel" =~ ^packages/[A-Za-z0-9._/-]+$ ]]; then
+              echo "::error::Path paket tidak aman: $rel"
+              exit 1
+            fi
+            if [ -L "$rel" ]; then
+              echo "::error::Symlink tidak diizinkan: $rel"
+              exit 1
+            fi
+            if [ ! -f "$rel" ]; then
+              echo "::error::Paket tidak ditemukan: $rel"
+              exit 1
+            fi
+          done
+
+      - name: Validate packages and build ephemeral index
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/registry"
+
+          (
+            cd .bufferite-tool
+            dart run tool/registry_cli.dart keygen \
+              --key-id pr-package --usage package \
+              --out "$RUNNER_TEMP/registry/package-key.json" \
+              --public-out "$RUNNER_TEMP/registry/package-public.json"
+            dart run tool/registry_cli.dart keygen \
+              --key-id pr-index --usage index \
+              --out "$RUNNER_TEMP/registry/index-key.json" \
+              --public-out "$RUNNER_TEMP/registry/index-public.json"
+          )
+
+          jq -s '{keys: ((.[0].keys // []) + (.[1].keys // []))}' \
+            "$RUNNER_TEMP/registry/package-public.json" \
+            "$RUNNER_TEMP/registry/index-public.json" \
+            > "$RUNNER_TEMP/registry/keyring.json"
+
+          mapfile -t paths < <(jq -r '.packages[].path // empty' registry-source.json)
+          for rel in "${paths[@]}"; do
+            (
+              cd .bufferite-tool
+              dart run tool/registry_cli.dart sign package \
+                --in "$GITHUB_WORKSPACE/$rel" \
+                --out "$GITHUB_WORKSPACE/$rel.sig" \
+                --key "$RUNNER_TEMP/registry/package-key.json"
+            )
+          done
+
+          base_url="$(jq -r '.baseUrl' registry-source.json)"
+          if curl -fsSL --retry 2 --retry-delay 2 --max-time 30 \
+            "$base_url" -o "$RUNNER_TEMP/registry/previous.json"; then
+            echo "Indeks publik sebelumnya ditemukan."
+          else
+            rm -f "$RUNNER_TEMP/registry/previous.json"
+            echo "Belum ada indeks publik; validasi sebagai publish pertama."
+          fi
+
+          args=(
+            build-index
+            --source "$GITHUB_WORKSPACE/registry-source.json"
+            --out "$RUNNER_TEMP/registry/registry.json"
+            --keyring "$RUNNER_TEMP/registry/keyring.json"
+          )
+          if [ -f "$RUNNER_TEMP/registry/previous.json" ]; then
+            args+=(--base "$RUNNER_TEMP/registry/previous.json")
+          fi
+          (cd .bufferite-tool && dart run tool/registry_cli.dart "${args[@]}")
+
+          (
+            cd .bufferite-tool
+            dart run tool/registry_cli.dart validate index \
+              --in "$RUNNER_TEMP/registry/registry.json" \
+              --base-url "$base_url"
+            dart run tool/registry_cli.dart sign index \
+              --in "$RUNNER_TEMP/registry/registry.json" \
+              --out "$RUNNER_TEMP/registry/registry.json.sig" \
+              --key "$RUNNER_TEMP/registry/index-key.json"
+            dart run tool/registry_cli.dart verify index \
+              --in "$RUNNER_TEMP/registry/registry.json" \
+              --sig "$RUNNER_TEMP/registry/registry.json.sig" \
+              --keyring "$RUNNER_TEMP/registry/keyring.json" \
+              --base-url "$base_url"
+          )
+
+          for rel in "${paths[@]}"; do
+            (
+              cd .bufferite-tool
+              dart run tool/registry_cli.dart verify package \
+                --in "$GITHUB_WORKSPACE/$rel" \
+                --sig "$GITHUB_WORKSPACE/$rel.sig" \
+                --keyring "$RUNNER_TEMP/registry/keyring.json"
+            )
+          done
+
+      - name: Check immutable versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          previous="$RUNNER_TEMP/registry/previous.json"
+          if [ ! -f "$previous" ]; then
+            echo "Tidak ada indeks sebelumnya; pemeriksaan immutability dilewati."
+            exit 0
+          fi
+          jq -e --slurpfile next "$RUNNER_TEMP/registry/registry.json" '
+            all(.plugins[]; . as $old |
+              ([ $next[0].plugins[] |
+                 select(.pluginId == $old.pluginId and .version == $old.version)
+               ][0]) as $new |
+              ($new != null) and
+              ($new.sha256 == $old.sha256) and
+              ($new.downloadUrl == $old.downloadUrl)
+            )
+          ' "$previous" > /dev/null
+          echo "Semua versi lama tetap ada dengan hash dan URL yang sama."
