@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "steps": [
+    {
+      "op": "regex_replace",
+      "pattern": "\r\n?",
+      "replacement": "\n"
+    }
+  ]
+}

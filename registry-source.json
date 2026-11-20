@@ -8,6 +8,16 @@
       "path": "packages/dev.bufferite.newline-normalizer/1.0.0/newline-normalizer-1.0.0.berp",
       "summary": "Mengubah akhir baris CRLF/CR menjadi LF.",
       "publishedAt": "2026-11-20T14:01:00Z",
+      "status": "revoked",
+      "tags": [
+        "text",
+        "utility"
+      ]
+    },
+    {
+      "path": "packages/dev.bufferite.newline-normalizer/1.1.0/newline-normalizer-1.1.0.berp",
+      "summary": "Mengubah akhir baris CRLF/CR menjadi LF.",
+      "publishedAt": "2026-11-20T15:01:19Z",
       "status": "active",
       "tags": [
         "text",
