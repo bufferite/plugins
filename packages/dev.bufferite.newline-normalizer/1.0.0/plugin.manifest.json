@@ -1,0 +1,24 @@
+{
+  "manifestVersion": 1,
+  "pluginId": "dev.bufferite.newline-normalizer",
+  "name": "Newline Normalizer",
+  "version": "1.0.0",
+  "author": "Bufferite",
+  "description": "Mengubah akhir baris CRLF dan CR menjadi LF agar teks konsisten lintas platform.",
+  "license": "MIT",
+  "homepage": "https://github.com/bufferite/plugins",
+  "minAppVersion": "1.0.0",
+  "tier": "dsl",
+  "entrypoint": "transform.json",
+  "permissions": ["cpu"],
+  "operations": [
+    {
+      "id": "newline.normalize",
+      "name": "Normalisasi Baris Baru",
+      "category": "Utility",
+      "params": [],
+      "inputType": "text",
+      "outputType": "text"
+    }
+  ]
+}
