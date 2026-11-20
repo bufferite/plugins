@@ -1,0 +1,8 @@
+# Signed artifacts must be stored byte-for-byte. Git line-ending
+# conversion would invalidate the offline signature.
+release/registry.json -text
+release/registry.json.sig -text
+
+# Plugin packages are binary; signatures are base64 JSON.
+packages/**/*.berp binary
+packages/**/*.berp.sig -text

@@ -1,0 +1,20 @@
+{
+  "keys": [
+    {
+      "keyId": "official-package-2026-11",
+      "algorithm": "ed25519",
+      "usage": "package",
+      "publicKey": "YEtB3sepROEBGPFI1vRSrCyyF0Wq1dQUVNAXgBs96Hg=",
+      "status": "active",
+      "createdAt": "2026-11-20"
+    },
+    {
+      "keyId": "official-index-2026-11",
+      "algorithm": "ed25519",
+      "usage": "index",
+      "publicKey": "3fNwvv7naLpWQjX3uDw6obZZGViQx9AbaaRHUJgRNlY=",
+      "status": "active",
+      "createdAt": "2026-11-20"
+    }
+  ]
+}

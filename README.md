@@ -16,9 +16,14 @@ Status keputusan:
 
 - **D12 selesai (2026-11-20):** GitHub Pages, kontribusi lewat PR, deploy
   atomik dari `main`.
-- **D13 terbuka:** custody kunci Ed25519. Scaffold memakai secret environment
-  sebagai bootstrap; sebelum registry dibuka publik, kunci indeks wajib
-  dipindahkan ke offline/HSM.
+- **D13 selesai (2026-11-20):** kunci indeks disimpan offline/air-gapped dan
+  signing indeks dilakukan manual; kunci paket disimpan sebagai secret
+  environment CI. Rotasi paket 90 hari, rotasi indeks 12 bulan, overlap kunci
+  lama minimal 90 hari, revocation lewat rilis aplikasi yang memperbarui
+  trust store.
+- **D14 selesai (2026-11-20):** distribusi plugin hanya lewat PR ke repo
+  GitHub ini. Marketplace lanjutan, akun, rating, ulasan, atau laporan
+  ditunda; aplikasi hanya menampilkan katalog read-only dan pencarian lokal.
 
 ## Struktur
 
@@ -26,13 +31,19 @@ Status keputusan:
 registry-source.json                 daftar paket yang dikurasi
 packages/<pluginId>/<version>/*.berp  paket plugin
 keys/registry_keys.json              trust store publik (tanpa private key)
-COMMUNITY.md                         daftar repo komunitas, tidak dibaca app
+release/registry.json                indeks bertanda tangan (hasil signing offline)
+release/registry.json.sig            signature indeks
+.gitattributes                       jaga byte artifact bertanda tangan
+COMMUNITY.md                         panduan kontributor, tidak dibaca app
+.github/pull_request_template.md     checklist PR
 .github/workflows/validate.yml       validasi PR tanpa secret
-.github/workflows/publish.yml        tanda tangan + build + deploy Pages
+.github/workflows/publish.yml        tanda tangan paket + build indeks (artifact)
+.github/workflows/deploy.yml         verifikasi + deploy indeks bertanda tangan
 ```
 
-Folder `packages/` dan `keys/` tidak menyertakan paket atau kunci produksi.
-Isi keduanya saat mulai mempublikasikan plugin.
+Folder `packages/` dan `release/` tidak menyertakan paket atau indeks produksi
+di scaffold ini. `keys/` hanya berisi public key (aman di-commit); private key
+tidak pernah ada di repo.
 
 ## Setup awal
 
@@ -40,43 +51,48 @@ Isi keduanya saat mulai mempublikasikan plugin.
 2. Aktifkan **Settings > Pages > Build and deployment > GitHub Actions**.
    Tambahkan custom domain `plugins.bufferite.dev`, lalu arahkan CNAME
    `plugins.bufferite.dev` ke `bufferite.github.io`.
-3. Buat dua kunci Ed25519 dari root repo aplikasi. Jangan commit hasilnya:
+3. Buat kunci paket di mesin CI/administratif:
 
    ```powershell
    dart run tool/registry_cli.dart keygen `
-     --key-id official-package-2026-01 --usage package `
+     --key-id official-package-2026-11 --usage package `
      --out .keys/package.json --public-out .keys/package-public.json
-
-   dart run tool/registry_cli.dart keygen `
-     --key-id official-index-2026-01 --usage index `
-     --out .keys/index.json --public-out .keys/index-public.json
    ```
 
-4. Gabungkan public key menjadi trust store publik dan commit ke repo
-   registry:
+4. Buat kunci indeks di mesin offline/air-gapped. Jangan pernah menyalin
+   private key indeks ke mesin yang terhubung internet:
+
+   ```powershell
+   dart run tool/registry_cli.dart keygen `
+     --key-id official-index-2026-11 --usage index `
+     --out D:\offline\official-index-2026-11.json `
+     --public-out D:\offline\official-index-public.json
+   ```
+
+5. Gabungkan public key menjadi trust store publik, lalu commit ke repo
+   registry **dan** aplikasi:
 
    ```powershell
    jq -s '{keys: ((.[0].keys // []) + (.[1].keys // []))}' `
-     .keys/package-public.json .keys/index-public.json `
+     .keys/package-public.json D:\offline\official-index-public.json `
      > ..\plugins\keys\registry_keys.json
    ```
 
-5. Buat environment `registry-publish` di repo registry dengan required
-   reviewers. Simpan isi file private key sebagai environment secret:
+   File yang sama dibundel aplikasi sebagai `assets/registry_keys.json`.
 
-   - `REGISTRY_PACKAGE_KEY` — isi `package.json`
-   - `REGISTRY_INDEX_KEY` — isi `index.json`
+6. Buat environment `registry-publish` di repo registry dengan required
+   reviewers. Simpan hanya kunci paket sebagai environment secret
+   `REGISTRY_PACKAGE_KEY` (isi `package.json`). Kunci indeks **tidak** boleh
+   menjadi secret CI.
 
-   Untuk bootstrap, keduanya boleh berupa secret environment. Kunci indeks
-   produksi tetap harus pindah ke offline/HSM sesuai D13.
+7. Set repository variable `BUFFERITE_TOOL_REF` ke commit SHA repo aplikasi
+   yang sudah berisi `tool/registry_cli.dart` (F16-T08). Jangan memakai `main`
+   untuk produksi.
 
-6. Set repository variable `BUFFERITE_TOOL_REF` ke commit SHA repo
-   aplikasi yang sudah berisi `tool/registry_cli.dart` (F16-T08). Jangan
-   memakai `main` untuk produksi.
-
-7. Lindungi branch `main`: required review, status check
+8. Lindungi branch `main`: required review, status check
    `Validate registry`, no force-push, linear history. Batasi who can push.
-   Aktifkan 2FA untuk owner org dan secret scanning.
+   Aktifkan 2FA untuk owner org dan secret scanning. Batasi juga akses ke
+   folder `release/**` lewat CODEOWNERS.
 
 ## Alur kontribusi
 
@@ -98,17 +114,23 @@ Isi keduanya saat mulai mempublikasikan plugin.
    }
    ```
 
-3. Buka pull request. Workflow `validate.yml` berjalan **tanpa secret**:
-   membuat kunci sementara, menandatangani paket, membangun indeks, lalu
-   memverifikasi signature dan batasnya.
+3. Buka pull request; template PR berisi checklist singkat. Workflow
+   `validate.yml` berjalan **tanpa secret**: membuat kunci sementara,
+   menandatangani paket, membangun indeks, lalu memverifikasi signature dan
+   batasnya.
 4. Maintainer review dengan checklist `REGISTRY.md` §13.3, termasuk source
    Lua/WASM, izin, lisensi, dan hash paket.
-5. Setelah merge ke `main`, `publish.yml` menandatangani paket dengan kunci
-   package, membangun indeks baru, menandatangani indeks, dan men-deploy
-   seluruh site secara atomik.
+5. Merge ke `main` = selesai untuk kontributor. `publish.yml` menandatangani
+   paket dengan kunci package dan membangun indeks; maintainer lalu
+   menandatangani indeks secara offline (lihat bagian berikut). Setelah deploy
+   dan refresh katalog, plugin muncul di aplikasi.
 
-File `.sig` tidak perlu di-commit. Workflow publish membuatnya saat deploy.
-Untuk build lokal, tanda tangani paket lebih dulu dengan kunci package dev:
+Tidak ada marketplace lanjutan, akun, rating, atau laporan. Aplikasi hanya
+melakukan pencarian lokal terhadap `registry.json` yang sudah ditandatangani.
+
+File `.sig` paket tidak perlu di-commit. Workflow membuatnya saat build dan
+deploy. Untuk build lokal, tanda tangani paket lebih dulu dengan kunci package
+dev:
 
 ```powershell
 dart run tool/registry_cli.dart sign package `
@@ -117,43 +139,60 @@ dart run tool/registry_cli.dart sign package `
   --key .keys/package.json
 ```
 
-## Publikasi
+## Publikasi (signing offline)
 
 `publish.yml` mengambil indeks publik terakhir sebagai `--base`, sehingga
 `sequence` selalu naik. Workflow juga menolak perubahan pada versi yang sudah
 pernah terbit: `sha256` dan `downloadUrl` harus sama. Ini menjaga URL paket
 tetap immutable.
 
-Urutan yang dilakukan workflow:
+Urutan publish:
 
-1. validasi source + paket,
-2. tanda tangani setiap paket,
-3. `build-index` dengan trust store publik,
-4. tanda tangani `registry.json`,
-5. verifikasi paket + indeks,
-6. unggah artifact Pages dan deploy.
+1. `publish.yml` memvalidasi source + paket, menandatangani paket, membangun
+   `registry.json`, dan mengunggah artifact `registry-release` (14 hari).
+2. Maintainer mengunduh artifact, memeriksa `registry.json.sha256`, lalu
+   menandatangani `registry.json` dengan kunci indeks di mesin offline.
+3. Maintainer memverifikasi signature dengan `keys/registry_keys.json`, lalu
+   commit `release/registry.json` + `release/registry.json.sig`.
+4. `deploy.yml` memverifikasi signature, mengambil indeks publik sebelumnya,
+   membangun ulang indeks secara deterministik, dan membandingkannya
+   byte-per-byte. Jika cocok, paket ditandatangani dengan kunci paket CI dan
+   seluruh site di-deploy atomik.
 
-Jika deploy gagal, jangan menurunkan `sequence` dan jangan menimpa paket.
-Perbaiki penyebabnya, lalu terbitkan indeks baru dengan `sequence` lebih
-tinggi. Untuk mencabut versi, ubah `status` menjadi `yanked`/`revoked`.
+Detail langkah signing ada di `release/README.md`. Jika deploy gagal, jangan
+menurunkan `sequence` dan jangan menimpa paket. Perbaiki penyebabnya, lalu
+terbitkan indeks baru dengan `sequence` lebih tinggi. Untuk mencabut versi,
+ubah `status` menjadi `yanked`/`revoked`.
+
+## Rotasi & revocation
+
+- **Kunci paket:** rotasi setiap 90 hari. Tambahkan public key baru ke
+  `keys/registry_keys.json` dan `assets/registry_keys.json` lewat rilis
+  aplikasi, pasang private key baru sebagai `REGISTRY_PACKAGE_KEY`, lalu
+  tandatangani ulang paket pada publish berikutnya. Pertahankan kunci lama
+  berstatus `active` minimal 90 hari sebelum ditandai `revoked`.
+- **Kunci indeks:** rotasi setiap 12 bulan. Buat kunci baru di mesin offline,
+  pin public key lewat rilis aplikasi, dan pertahankan kunci lama minimal 90
+  hari. Setelah semua indeks ditandatangani ulang, cabut kunci lama lewat
+  rilis aplikasi berikutnya.
+- **Revocation kunci:** ubah `status` menjadi `revoked` di trust store dan
+  kirim lewat rilis aplikasi. Tidak ada remote key update; aplikasi lama tetap
+  mempercayai kunci lama sampai diperbarui.
+- **Revocation plugin:** ubah `status` entri menjadi `yanked`/`revoked` di
+  `registry-source.json`, build ulang, dan tanda tangani indeks baru. Aplikasi
+  menonaktifkan plugin `revoked` saat katalog dimuat/di-refresh.
 
 ## Keamanan
 
 - Private key tidak pernah masuk repo, artifact, atau log.
-- `keys/registry_keys.json` hanya berisi public key dan aman di-commit.
+- Kunci indeks hanya ada di mesin offline/HSM; CI tidak pernah menerimanya.
+- `keys/registry_keys.json` dan `assets/registry_keys.json` hanya berisi public
+  key dan aman di-commit.
 - Jangan memakai `pull_request_target` untuk menjalankan kode dari PR.
 - Pin semua GitHub Actions ke commit SHA sebelum produksi. File scaffold ini
   memakai tag major agar mudah diperbarui saat awal.
 - Gunakan environment reviewer untuk job yang memegang private key.
-- Batasi akses tulis ke `main` dan `packages/**` lewat branch protection dan
-  CODEOWNERS.
+- Batasi akses tulis ke `main`, `packages/**`, dan `release/**` lewat branch
+  protection dan CODEOWNERS.
 - GitHub Pages adalah single point of failure; aplikasi tetap wajib punya
   cache offline dan gagal dengan aman.
-
-## Catatan D13
-
-Workflow publish di scaffold menandatangani indeks dengan secret environment
-`REGISTRY_INDEX_KEY`. Itu hanya jalan pintas bootstrap. Sebelum registry
-dibuka publik, ganti langkah tersebut dengan prosedur signing offline/HSM dan
-simpan signature bersama indeks untuk audit. Rotasi dan revocation mengikuti
-`REGISTRY.md` §5.3.

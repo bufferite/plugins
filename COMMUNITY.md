@@ -1,24 +1,58 @@
 # Plugin komunitas
 
-Daftar ini untuk manusia. Aplikasi **tidak** membaca file ini dan tidak
-menganggap plugin di sini sebagai plugin registry resmi.
+Registry resmi adalah katalog **read-only** dari repo
+[`bufferite/plugins`](https://github.com/bufferite/plugins). Aplikasi hanya
+membaca indeks yang sudah ditandatangani, menampilkan pencarian/detail, lalu
+menginstal paket yang Anda pilih.
 
-Plugin yang belum masuk `registry-source.json` belum direview. Jangan
-menginstalnya sebagai plugin tepercaya; perlakukan seperti sideload
-`unverified`.
+Tidak ada marketplace lanjutan, akun, rating, ulasan, laporan, atau backend
+terpisah. Kontribusi plugin cukup lewat pull request ke repo registry.
 
-## Cara mengusulkan
+## Alur kontribusi
 
-Buka issue/PR di repo registry dengan:
+1. Fork `bufferite/plugins`, lalu buat branch.
+2. Tambahkan paket `.berp`:
 
-- URL source repository,
-- lisensi,
-- ringkasan fungsi dan izin yang diminta,
-- link rilis `.berp` (opsional; paket tetap harus lewat PR registry untuk
-  masuk katalog resmi).
+   ```text
+   packages/<pluginId>/<versi>/<nama>-<versi>.berp
+   ```
 
-## Daftar
+3. Tambahkan satu entri ke `registry-source.json` (path, `summary`,
+   `publishedAt`, `status`, `tags`).
+4. Buka pull request. Workflow **Validate registry** memeriksa path, paket,
+   signature sementara, izin, dan batas ukuran tanpa memakai secret.
+5. Maintainer review source Lua/WASM dan izin memakai checklist
+   `REGISTRY.md` §13.3.
+6. Setelah merge, maintainer menandatangani indeks dan men-deploy. Setelah
+   aplikasi me-refresh katalog, plugin muncul dan bisa dicari berdasarkan
+   nama, `pluginId`, `summary`, atau tag.
 
-| Repository | Plugin | Status |
-|---|---|---|
-| — | — | Belum ada |
+Dari sisi kontributor, pekerjaan selesai saat PR di-merge. Tidak ada upload
+manual ke server atau akun yang perlu dibuat.
+
+## Isi pull request
+
+- Paket `.berp` berisi `plugin.manifest.json`, entrypoint, dan `LICENSE`.
+- Entri `registry-source.json` untuk paket tersebut.
+- URL source repository dan lisensi di deskripsi PR (opsional, membantu
+  review).
+- Untuk tier Lua: source dapat dibaca, tanpa obfuscation atau bytecode
+  dinamis.
+
+Template PR menyediakan checklist singkat saat Anda membuka pull request.
+
+## Status rilis
+
+- `active` — tampil dan dapat diinstal.
+- `deprecated` — masih dapat diinstal dengan peringatan.
+- `yanked` — tidak ditawarkan untuk instalasi baru.
+- `revoked` — dinonaktifkan otomatis di perangkat yang sudah memasangnya.
+
+## Verifikasi lokal (opsional)
+
+```powershell
+dart run tool/registry_cli.dart validate package --in path/plugin.berp
+```
+
+CI tetap menjalankan verifikasi penuh. Perintah di atas hanya membantu
+menangkap kesalahan lebih awal.

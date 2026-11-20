@@ -1,7 +1,7 @@
 # Scaffold workflow. Pin every action to a commit SHA before production.
-# The environment secret for the index key is a bootstrap compromise until D13
-# moves index signing offline/HSM.
-name: Publish registry
+# D13: CI only holds the package key. The index is built here but signed
+# offline; commit the signature to release/ and let deploy.yml publish it.
+name: Build registry release
 
 on:
   push:
@@ -15,11 +15,9 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
-  group: registry-publish
+  group: registry-build
   cancel-in-progress: false
 
 jobs:
@@ -52,28 +50,31 @@ jobs:
         working-directory: .bufferite-tool
         run: flutter pub get
 
-      - name: Load signing keys
+      - name: Load package signing key
         shell: bash
         env:
           PACKAGE_KEY: ${{ secrets.REGISTRY_PACKAGE_KEY }}
-          INDEX_KEY: ${{ secrets.REGISTRY_INDEX_KEY }}
         run: |
           set -euo pipefail
           if [ ! -f keys/registry_keys.json ]; then
             echo "::error::keys/registry_keys.json belum ada."
             exit 1
           fi
-          if [ -z "${PACKAGE_KEY:-}" ] || [ -z "${INDEX_KEY:-}" ]; then
-            echo "::error::Secret REGISTRY_PACKAGE_KEY/REGISTRY_INDEX_KEY belum diisi."
+          if [ -z "${PACKAGE_KEY:-}" ]; then
+            echo "::error::Secret REGISTRY_PACKAGE_KEY belum diisi."
             exit 1
           fi
           umask 077
           printf '%s' "$PACKAGE_KEY" > "$RUNNER_TEMP/package-key.json"
-          printf '%s' "$INDEX_KEY" > "$RUNNER_TEMP/index-key.json"
           jq -e '.algorithm == "ed25519" and (.privateKey | type == "string")' \
             "$RUNNER_TEMP/package-key.json" > /dev/null
-          jq -e '.algorithm == "ed25519" and (.privateKey | type == "string")' \
-            "$RUNNER_TEMP/index-key.json" > /dev/null
+          key_id="$(jq -r '.keyId' "$RUNNER_TEMP/package-key.json")"
+          jq -e --arg id "$key_id" '
+            any(.keys[];
+              .keyId == $id and
+              .usage == "package" and
+              .status == "active")
+          ' keys/registry_keys.json > /dev/null
 
       - name: Download and verify previous index
         id: previous
@@ -171,71 +172,51 @@ jobs:
           ' "$PREVIOUS_INDEX" > /dev/null
           echo "Semua versi lama tetap ada dengan hash dan URL yang sama."
 
-      - name: Copy packages
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p _site/registry/v1/packages
-          cp -R packages/. _site/registry/v1/packages/
-
-      - name: Sign and verify index
+      - name: Validate index and packages
         shell: bash
         run: |
           set -euo pipefail
           base_url="$(jq -r '.baseUrl' registry-source.json)"
           (
             cd .bufferite-tool
-            dart run tool/registry_cli.dart sign index \
+            dart run tool/registry_cli.dart validate index \
               --in "$GITHUB_WORKSPACE/_site/registry/v1/registry.json" \
-              --out "$GITHUB_WORKSPACE/_site/registry/v1/registry.json.sig" \
-              --key "$RUNNER_TEMP/index-key.json"
-            dart run tool/registry_cli.dart verify index \
-              --in "$GITHUB_WORKSPACE/_site/registry/v1/registry.json" \
-              --sig "$GITHUB_WORKSPACE/_site/registry/v1/registry.json.sig" \
-              --keyring "$GITHUB_WORKSPACE/keys/registry_keys.json" \
               --base-url "$base_url"
           )
-
-      - name: Verify deployed packages
-        shell: bash
-        run: |
-          set -euo pipefail
           mapfile -t paths < <(jq -r '.packages[].path // empty' registry-source.json)
           for rel in "${paths[@]}"; do
             (
               cd .bufferite-tool
               dart run tool/registry_cli.dart verify package \
-                --in "$GITHUB_WORKSPACE/_site/registry/v1/$rel" \
-                --sig "$GITHUB_WORKSPACE/_site/registry/v1/$rel.sig" \
+                --in "$GITHUB_WORKSPACE/$rel" \
+                --sig "$GITHUB_WORKSPACE/$rel.sig" \
                 --keyring "$GITHUB_WORKSPACE/keys/registry_keys.json"
             )
           done
 
-      - name: Write Pages metadata
+      - name: Stage packages and checksum
         shell: bash
         run: |
           set -euo pipefail
-          host="$(jq -r '.baseUrl' registry-source.json | sed -E 's#^https://([^/]+).*#\1#')"
-          printf '%s\n' "$host" > _site/CNAME
-          touch _site/.nojekyll
+          mkdir -p _site/registry/v1/packages
+          cp -R packages/. _site/registry/v1/packages/
+          (
+            cd _site/registry/v1
+            sha256sum registry.json > registry.json.sha256
+          )
+          echo "### Registry release siap ditandatangani" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "sequence: $(jq -r '.sequence' _site/registry/v1/registry.json)" >> "$GITHUB_STEP_SUMMARY"
+          echo "generatedAt: $(jq -r '.generatedAt' _site/registry/v1/registry.json)" >> "$GITHUB_STEP_SUMMARY"
+          echo "sha256: $(cut -d' ' -f1 _site/registry/v1/registry.json.sha256)" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Unduh artifact, verifikasi sha256, lalu tanda tangani registry.json" >> "$GITHUB_STEP_SUMMARY"
+          echo "dengan kunci indeks offline. Commit release/registry.json dan" >> "$GITHUB_STEP_SUMMARY"
+          echo "release/registry.json.sig untuk memicu deploy.yml." >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Configure Pages
-        uses: actions/configure-pages@v5
+      - name: Upload unsigned release artifact
+        uses: actions/upload-artifact@v4
         with:
-          enablement: true
-
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: _site
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+          name: registry-release
+          path: _site/registry/v1
+          retention-days: 14
