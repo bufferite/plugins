@@ -30,7 +30,7 @@ Alur lengkap:
    dart run tool/registry_cli.dart verify index \
      --in registry.json --sig registry.json.sig \
      --keyring keys/registry_keys.json \
-     --base-url https://plugins.bufferite.dev/registry/v1/registry.json
+     --base-url https://bufferite.github.io/plugins/registry/v1/registry.json
    ```
 
 5. Commit `registry.json` dan `registry.json.sig` ke folder ini. Workflow

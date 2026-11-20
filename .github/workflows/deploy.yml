@@ -222,7 +222,9 @@ jobs:
           cp release/registry.json _site/registry/v1/registry.json
           cp release/registry.json.sig _site/registry/v1/registry.json.sig
           host="$(jq -r '.baseUrl' registry-source.json | sed -E 's#^https://([^/]+).*#\1#')"
-          printf '%s\n' "$host" > _site/CNAME
+          if [[ "$host" != *.github.io ]]; then
+            printf '%s\n' "$host" > _site/CNAME
+          fi
           touch _site/.nojekyll
 
       - name: Configure Pages

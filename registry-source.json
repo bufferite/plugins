@@ -1,7 +1,7 @@
 {
-  "baseUrl": "https://plugins.bufferite.dev/registry/v1/registry.json",
+  "baseUrl": "https://bufferite.github.io/plugins/registry/v1/registry.json",
   "allowedHosts": [
-    "plugins.bufferite.dev"
+    "bufferite.github.io"
   ],
   "packages": []
 }

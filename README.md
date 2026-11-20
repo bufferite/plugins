@@ -9,13 +9,19 @@ README atau `COMMUNITY.md`; satu-satunya sumber yang dibaca adalah
 `registry.json` + `registry.json.sig` dari:
 
 ```text
-https://plugins.bufferite.dev/registry/v1/registry.json
+https://bufferite.github.io/plugins/registry/v1/registry.json
 ```
+
+URL tersebut sementara (D15); domain kanonis jangka panjang adalah
+`https://plugins.bufferite.dev/registry/v1/registry.json`.
 
 Status keputusan:
 
 - **D12 selesai (2026-11-20):** GitHub Pages, kontribusi lewat PR, deploy
   atomik dari `main`.
+- **D15 selesai (2026-11-20):** memakai URL default GitHub Pages selama
+  `bufferite.dev` belum terdaftar. Kembali ke domain kanonis lewat rilis
+  aplikasi setelah DNS aktif.
 - **D13 selesai (2026-11-20):** kunci indeks disimpan offline/air-gapped dan
   signing indeks dilakukan manual; kunci paket disimpan sebagai secret
   environment CI. Rotasi paket 90 hari, rotasi indeks 12 bulan, overlap kunci
@@ -49,8 +55,10 @@ tidak pernah ada di repo.
 
 1. Buat repo publik `bufferite/plugins` dan salin isi folder ini ke root-nya.
 2. Aktifkan **Settings > Pages > Build and deployment > GitHub Actions**.
-   Tambahkan custom domain `plugins.bufferite.dev`, lalu arahkan CNAME
-   `plugins.bufferite.dev` ke `bufferite.github.io`.
+   Untuk sementara (D15), biarkan custom domain kosong agar site tersedia di
+   `https://bufferite.github.io/plugins/`. Setelah `bufferite.dev` terdaftar,
+   tambahkan custom domain `plugins.bufferite.dev` dan arahkan CNAME
+   `plugins` ke `bufferite.github.io`, lalu rilis aplikasi dengan URL kanonis.
 3. Buat kunci paket di mesin CI/administratif:
 
    ```powershell
