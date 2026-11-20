@@ -1,5 +1,5 @@
 {
   "algorithm": "ed25519",
   "keyId": "official-index-2026-11",
-  "signature": "RELuxKWmNQIY4nVDHbI0poc92l0rzqY/A3Ilr92jptimwV7fLrnqVpEr3rrembrvtwWnfA5sAJHZLepOl3bdBw=="
+  "signature": "qogz1D0E83eiGS6pjmB4d+kseqyBp307BXdTDXwaVuI5Au0ZdENRkj1NT6NCLIM1z203hWju1PH5wePlRp77CA=="
 }

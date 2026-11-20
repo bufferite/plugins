@@ -1,7 +1,7 @@
 {
   "registryVersion": 1,
-  "sequence": 2,
-  "generatedAt": "2026-11-20T14:01:00Z",
+  "sequence": 3,
+  "generatedAt": "2026-11-20T15:01:19Z",
   "allowedHosts": [
     "bufferite.github.io"
   ],
@@ -24,6 +24,30 @@
       "sha256": "bdffadb2e8b464c003a80386518eb919851f45f2d78bb5e0559472a616f43564",
       "downloadUrl": "packages/dev.bufferite.newline-normalizer/1.0.0/newline-normalizer-1.0.0.berp",
       "publishedAt": "2026-11-20T14:01:00Z",
+      "status": "revoked",
+      "tags": [
+        "text",
+        "utility"
+      ]
+    },
+    {
+      "pluginId": "dev.bufferite.newline-normalizer",
+      "version": "1.1.0",
+      "name": "Newline Normalizer",
+      "summary": "Mengubah akhir baris CRLF/CR menjadi LF.",
+      "description": "Mengubah akhir baris CRLF dan CR menjadi LF agar teks konsisten lintas platform.",
+      "author": "Bufferite",
+      "license": "MIT",
+      "homepage": "https://github.com/bufferite/plugins",
+      "tier": "dsl",
+      "minAppVersion": "1.0.0",
+      "permissions": [
+        "cpu"
+      ],
+      "sizeBytes": 1862,
+      "sha256": "59090b74af67142ecba22aba5ebfe7ecfbbe5d092b2f9c3826ff8714393b5dae",
+      "downloadUrl": "packages/dev.bufferite.newline-normalizer/1.1.0/newline-normalizer-1.1.0.berp",
+      "publishedAt": "2026-11-20T15:01:19Z",
       "status": "active",
       "tags": [
         "text",
