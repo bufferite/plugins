@@ -131,6 +131,35 @@ jobs:
           )
           echo "path=$RUNNER_TEMP/previous.json" >> "$GITHUB_OUTPUT"
 
+      - name: Sign and verify packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t paths < <(jq -r '.packages[].path // empty' registry-source.json)
+          for rel in "${paths[@]}"; do
+            if [[ "$rel" != packages/* || "$rel" == *".."* ||
+              "$rel" == /* ]] ||
+              ! [[ "$rel" =~ ^packages/[A-Za-z0-9._/-]+$ ]]; then
+              echo "::error::Path paket tidak aman: $rel"
+              exit 1
+            fi
+            if [ -L "$rel" ] || [ ! -f "$rel" ]; then
+              echo "::error::Paket tidak valid: $rel"
+              exit 1
+            fi
+            (
+              cd .bufferite-tool
+              dart run tool/registry_cli.dart sign package \
+                --in "$GITHUB_WORKSPACE/$rel" \
+                --out "$GITHUB_WORKSPACE/$rel.sig" \
+                --key "$RUNNER_TEMP/package-key.json"
+              dart run tool/registry_cli.dart verify package \
+                --in "$GITHUB_WORKSPACE/$rel" \
+                --sig "$GITHUB_WORKSPACE/$rel.sig" \
+                --keyring "$GITHUB_WORKSPACE/keys/registry_keys.json"
+            )
+          done
+
       - name: Rebuild and compare index
         shell: bash
         env:
@@ -183,35 +212,6 @@ jobs:
             )
           ' "$PREVIOUS_INDEX" > /dev/null
           echo "Semua versi lama tetap ada dengan hash dan URL yang sama."
-
-      - name: Sign and verify packages
-        shell: bash
-        run: |
-          set -euo pipefail
-          mapfile -t paths < <(jq -r '.packages[].path // empty' registry-source.json)
-          for rel in "${paths[@]}"; do
-            if [[ "$rel" != packages/* || "$rel" == *".."* ||
-              "$rel" == /* ]] ||
-              ! [[ "$rel" =~ ^packages/[A-Za-z0-9._/-]+$ ]]; then
-              echo "::error::Path paket tidak aman: $rel"
-              exit 1
-            fi
-            if [ -L "$rel" ] || [ ! -f "$rel" ]; then
-              echo "::error::Paket tidak valid: $rel"
-              exit 1
-            fi
-            (
-              cd .bufferite-tool
-              dart run tool/registry_cli.dart sign package \
-                --in "$GITHUB_WORKSPACE/$rel" \
-                --out "$GITHUB_WORKSPACE/$rel.sig" \
-                --key "$RUNNER_TEMP/package-key.json"
-              dart run tool/registry_cli.dart verify package \
-                --in "$GITHUB_WORKSPACE/$rel" \
-                --sig "$GITHUB_WORKSPACE/$rel.sig" \
-                --keyring "$GITHUB_WORKSPACE/keys/registry_keys.json"
-            )
-          done
 
       - name: Stage site
         shell: bash
